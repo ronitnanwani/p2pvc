@@ -34,8 +34,8 @@ signal.signal(signal.SIGINT, signal_handler)
 
 # ------------------ Configuration ------------------ #
 # Signalling server configuration
-SIGNAL_SERVER_HOST = "127.0.0.1"   # update if the signalling server is remote
-SIGNAL_SERVER_PORT = 6000
+SIGNAL_SERVER_HOST = "10.145.203.100"   # update if the signalling server is remote
+SIGNAL_SERVER_PORT = 6002
 
 # UDP ports for video, audio (and note that CBCAST is now applied to these channels)
 VIDEO_PORT = 5000
@@ -73,6 +73,9 @@ def get_local_ip():
         s.close()
     return local_ip
 
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+
 def signalling_handshake():
     """
     Connects to the signalling server, sends a JSON request including the client's actual IP,
@@ -89,15 +92,14 @@ def signalling_handshake():
         request["action"] = "join"
         request["meeting_id"] = requested_meeting
 
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.connect((SIGNAL_SERVER_HOST, SIGNAL_SERVER_PORT))
-        s.sendall((json.dumps(request) + "\n").encode('utf-8'))
-        response_line = s.makefile(mode='r').readline()
-        response = json.loads(response_line.strip())
-        if response.get("status") != "success":
-            print("Error from signalling server:", response.get("message"))
-            sys.exit(1)
-        return response
+    sock.connect((SIGNAL_SERVER_HOST, SIGNAL_SERVER_PORT))
+    sock.sendall((json.dumps(request) + "\n").encode('utf-8'))
+    response_line = sock.makefile(mode='r').readline()
+    response = json.loads(response_line.strip())
+    if response.get("status") != "success":
+        print("Error from signalling server:", response.get("message"))
+        sys.exit(1)
+    return response
     
 
 
@@ -105,31 +107,38 @@ print("Contacting signalling server ...")
 response = signalling_handshake()
 meeting_id = response["meeting_id"]
 peer_ips = response["peers"]
-
+# peer_ips.append('10.145.203.100')
 
 
 # peer_ips.append('10.145.203.100')
 print(f"Joined meeting {meeting_id}")
 print("Peer list:", peer_ips)
 
+video_vc = {ip: 0 for ip in peer_ips}  # includes local
+
 
     
 def listen_for_new_peers():
     def handler():
         try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.connect((SIGNAL_SERVER_HOST, SIGNAL_SERVER_PORT))
+            # with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            #     s.connect((SIGNAL_SERVER_HOST, SIGNAL_SERVER_PORT))
                 # Now keep listening for any "new_peer" announcements
-                while True:
-                    data = s.recv(4096)
-                    print("New peer connection")
-                    if not data:
-                        break
-                    msg = json.loads(data.decode().strip())
-                    if 'new_peer' in msg:
-                        peer_ip = msg['new_peer']
-                        print(f"[INFO] New peer joined: {peer_ip}")
-                        peer_ips.append(peer_ip)
+            while True:
+                data = sock.recv(4096)
+                print("New peer connection")
+                if not data:
+                    break
+                msg = json.loads(data.decode().strip())
+                if 'new_peer' in msg:
+                    peer_ip = msg['new_peer']
+                    
+                    print(f"[INFO] New peer joined: {peer_ip}")
+                    peer_ips.append(peer_ip)
+                    video_vc[peer_ip] = 0
+                    print("New peer added")
+                    print(peer_ips)
+                    
         except Exception as e:
             print("[ERROR] Listener thread:", e)
 
@@ -146,15 +155,14 @@ listen_for_new_peers()
 local_ip = get_local_ip()
 
 # Build the peers dictionary for AV streams (exclude self)
-peers = {ip: None for ip in peer_ips }
+# peers = {ip: None for ip in peer_ips }
 
 print("Local IP:", local_ip)
-print("Other peers:", list(peers.keys()))
+# print("Other peers:", list(peers.keys()))
 
 # ------------------ CBCAST Setup for Video and Audio ------------------ #
 # Create separate vector clocks, locks, and pending buffers for video and audio.
 vc_lock_video = threading.Lock()
-video_vc = {ip: 0 for ip in peer_ips}  # includes local
 pending_buffer_video = []  # list of tuples: (sender, vc, payload)
 
 vc_lock_audio = threading.Lock()
@@ -190,6 +198,7 @@ def check_pending_buffer_video():
                     frame_arr = np.frombuffer(payload, dtype=np.uint8)
                     frame = cv2.imdecode(frame_arr, 1)
                     if frame is not None:
+                        pass
                         cv2.imshow(f'{sender}', frame)
                         if cv2.waitKey(1) & 0xFF == 27:
                             break
@@ -227,8 +236,8 @@ audio_sock.bind(('', AUDIO_PORT))
 
 # ------------------ Video: Sending and Receiving with CBCAST ------------------ #
 def send_video():
-    # cap = cv2.VideoCapture(0)
-    cap = cv2.VideoCapture('sample_video_client.mp4')
+    cap = cv2.VideoCapture(0)
+    # cap = cv2.VideoCapture('sample_video_client.mp4')
     global video_vc
     while True:
         ret, frame = cap.read()
@@ -254,7 +263,7 @@ def send_video():
         # Packet format: [4 bytes header length][header JSON][payload]
         packet = struct.pack("!I", header_len) + header_json + payload
         # Broadcast this video frame to every peer.
-        for ip in peers:
+        for ip in peer_ips:
             video_sock.sendto(packet, (ip, VIDEO_PORT))
             # print("sent")
         time.sleep(0.033)  # Approximately 30 fps
@@ -262,26 +271,35 @@ def send_video():
 def receive_video():
     while True:
         try:
+            print("Before recv from")
             data, addr = video_sock.recvfrom(65536)
+            print("Recved from: ", addr[0])
             if len(data) < 4:
                 continue
             # Extract header length.
+            print("Before unpacking")
             header_len = struct.unpack("!I", data[:4])[0]
+            print("Unpacking")
             header_json = data[4:4+header_len]
             header = json.loads(header_json.decode('utf-8'))
             sender = header["sender"]
+            print("sender = ",sender)
             msg_vc = header["vc"]
             payload = data[4+header_len:]
+            
             with vc_lock_video:
                 # video_vc[local_ip] += 1
                 # print(msg_vc)
                 # print(video_vc)
                 if can_deliver(sender, msg_vc, video_vc):
+                    print("Can delivar message")
                     frame_arr = np.frombuffer(payload, dtype=np.uint8)
+                    print("np.frombuffer")
                     frame = cv2.imdecode(frame_arr, 1)
                     if frame is not None:
-                        # print("frame is not None")
+                        print("frame is not None")
                         cv2.imshow(f'{sender}', frame)
+                        print("After cv2.imshow")
                         if cv2.waitKey(1) & 0xFF == 27:
                             break
                     video_vc[sender] = max(msg_vc[sender],video_vc[sender])
@@ -310,7 +328,7 @@ def send_audio():
         header_json = json.dumps(header).encode('utf-8')
         header_len = len(header_json)
         packet = struct.pack("!I", header_len) + header_json + data_bytes
-        for ip in peers:
+        for ip in peer_ips:
             audio_sock.sendto(packet, (ip, AUDIO_PORT))
     with sd.InputStream(samplerate=AUDIO_SAMPLERATE, channels=AUDIO_CHANNELS,
                         blocksize=AUDIO_CHUNK, dtype='int16', callback=callback):

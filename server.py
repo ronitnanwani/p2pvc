@@ -10,7 +10,7 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %
 
 # Server configuration
 SERVER_HOST = '0.0.0.0'
-SERVER_PORT = 6000  # port used for signalling
+SERVER_PORT = 6002  # port used for signalling
 
 # In-memory structure for meetings.
 # meetings: key = meeting_id, value = set of peer IPs
@@ -80,7 +80,22 @@ def leave_meeting(meeting_id, client_ip):
         else:
             logging.warning(f"Leave attempt for non-existent meeting {meeting_id} by {client_ip}")
             return False
-
+def get_local_ip():
+    """
+    Returns the actual local network IP address (e.g., 10.xxx.xxx.xxx or 192.168.xxx.xxx)
+    rather than 127.0.0.1 by opening a temporary UDP socket.
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # The IP doesn't need to be reachable; we just get the local IP used for this connection.
+        s.connect(("8.8.8.8", 80))
+        local_ip = s.getsockname()[0]
+    except Exception as e:
+        print("Error determining local IP:", e)
+        local_ip = "127.0.0.1"
+    finally:
+        s.close()
+    return local_ip
 def list_meetings():
     """Return a list of active meeting IDs."""
     with meetings_lock:
@@ -99,7 +114,8 @@ def handle_client(conn, addr):
     
     with peer_connections_lock:
         if(addr[0] == '127.0.0.1'):
-            peer_connections['10.145.152.10'] = file    # TODO: local machine ipv4 address
+            ip = get_local_ip()
+            peer_connections[ip] = file    # TODO: local machine ipv4 address
         else:
             peer_connections[addr[0]] = file
 
