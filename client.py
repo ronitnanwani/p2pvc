@@ -122,6 +122,7 @@ def listen_for_new_peers():
                 # Now keep listening for any "new_peer" announcements
                 while True:
                     data = s.recv(4096)
+                    print("New peer connection")
                     if not data:
                         break
                     msg = json.loads(data.decode().strip())
@@ -226,8 +227,8 @@ audio_sock.bind(('', AUDIO_PORT))
 
 # ------------------ Video: Sending and Receiving with CBCAST ------------------ #
 def send_video():
-    cap = cv2.VideoCapture(0)
-    # cap = cv2.VideoCapture('sample_video_client.mp4')
+    # cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture('sample_video_client.mp4')
     global video_vc
     while True:
         ret, frame = cap.read()

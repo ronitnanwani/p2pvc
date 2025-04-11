@@ -32,9 +32,13 @@ def create_meeting(client_ip):
 def notify_peers(peer_ips, message):
     with peer_connections_lock:
         for ip in peer_ips:
+            print(ip)
+            print(peer_connections)
             file = peer_connections.get(ip)
+            print("Before if")
             if file:
                 try:
+                    print("Writing to ssocket")
                     file.write((json.dumps(message) + '\n').encode('utf-8'))
                     file.flush()
                 except Exception as e:
@@ -49,6 +53,7 @@ def join_meeting(meeting_id, client_ip):
             logging.info(f"Peer {client_ip} joined meeting {meeting_id}")
                         # Notify other peers
             other_peers = meetings[meeting_id] - {client_ip}
+            print("Notifying other peers")
             notify_peers(other_peers, {
                 "status":"success",
                 "type": "new_peer",
@@ -83,6 +88,8 @@ def list_meetings():
     logging.info("Listing active meetings")
     return active
 
+
+
 def handle_client(conn, addr):
     client_ip = addr[0]
     print(client_ip)
@@ -91,7 +98,10 @@ def handle_client(conn, addr):
     file = conn.makefile(mode='rwb')
     
     with peer_connections_lock:
-        peer_connections[addr[0]] = file
+        if(addr[0] == '127.0.0.1'):
+            peer_connections['10.145.152.10'] = file    # TODO: local machine ipv4 address
+        else:
+            peer_connections[addr[0]] = file
 
     try:
         # Continuously process client requests
