@@ -10,15 +10,18 @@ import logging
 from collections import defaultdict
 import requests
 
-SERVER_HOST = '10.42.0.29'
+IP1 =  '192.168.137.59'     # oms ip
+IP2 = '192.168.137.9'       # ronits ip
+IP3 = "10.117.166.40"       # chinmays ip
+SERVER_HOST = IP2
 SERVER_PORT = 6004  # Client communication port
 RAFT_PORT = 6005    # RAFT RPC port
 
 # Configuration for 3 servers (modify with your actual IPs)
 SERVERS = {
-    1: ('10.42.0.151', RAFT_PORT),
-    2: ('10.42.0.29', RAFT_PORT),
-    3: ('10.117.166.40',RAFT_PORT)
+    1: (IP1, RAFT_PORT),
+    2: (IP2, RAFT_PORT),
+    3: (IP3,RAFT_PORT)
 }
 
 meetings = {}
@@ -98,7 +101,7 @@ class RaftNode:
     def notify_load_balancers(self):
         leader_ip = SERVERS[self.node_id][0]
         print("Notifying load balancers#############################")
-        lb_list = ["http://10.42.0.151:8090", "http://10.42.0.29:8090"]  # Replace with actual LB IPs or hostnames
+        lb_list = [f"http://{IP1}:8090", f"http://{IP2}:8090"]  # Replace with actual LB IPs or hostnames
         for lb in lb_list:
             try:
                 requests.post(f"{lb}/update_leader", json={"leader": leader_ip}, timeout=2)
@@ -259,7 +262,7 @@ class RaftNode:
                     for i in range(self.lastApplied, self.commitIndex):
                         entry = self.log[i]
                         result = self.apply_entry(entry)
-                        print("apply entry completed")
+                        print("apply entry completed ", result)
                         request_id = entry.get('request_id')
                         if request_id and self.state == 'leader':
                             with self.results_lock:
@@ -281,6 +284,7 @@ class RaftNode:
                 print(f"Apply entry from index {self.lastApplied} to {self.commitIndex}")
             return {'meeting_id': meeting_id, 'peers': [client_ip]}
         elif action == 'join':
+            
             with meetings_lock:
                 if meeting_id in meetings:
                     meetings[meeting_id].add(client_ip)
@@ -297,13 +301,14 @@ class RaftNode:
                 else:
                     return {'error': 'Meeting does not exist'}
         elif action == 'leave':
+            
             with meetings_lock:
                 if meeting_id in meetings:
                     meetings[meeting_id].discard(client_ip)
                     other_peers = list(meetings[meeting_id])
                     # with peer_connections_lock:
                     #     other_peers = [ip for ip in peers if ip != client_ip and ip in peer_connections]
-
+                    print("Before notifying peers functions")
                     notify_peers(other_peers, {
                         "status": "success",
                         "type": "leave_peer",
@@ -317,9 +322,11 @@ class RaftNode:
                         return {'message': 'Peer left'}
                 else:
                     return {'error': 'Meeting does not exist'}
+        
         return {'error': 'Unknown action'}
 
 def notify_peers(peer_ips, message):
+    print("In notifying peers")
     if(message["type"] == "new_peer"):
         with peer_connections_lock:
             for ip in peer_ips:
@@ -332,6 +339,7 @@ def notify_peers(peer_ips, message):
                     except Exception as e:
                         print(f"[Notify Error] Failed to notify peer {ip}: {e}")
     elif(message["type"] == "leave_peer"):
+        print("Notifying peers about meeting leave by ",message["leaving_peer"])
         with peer_connections_lock:
             for ip in peer_ips:
                 file = peer_connections.get(ip)

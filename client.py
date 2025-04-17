@@ -92,7 +92,7 @@ def signalling_handshake():
     else:
         request["action"] = "join"
         request["meeting_id"] = requested_meeting
-    result = subprocess.run(['curl', '-s', 'http://10.42.0.100:8080/leader'], stdout=subprocess.PIPE)
+    result = subprocess.run(['curl', '-s', 'http://192.168.137.100:8080/leader'], stdout=subprocess.PIPE)
     # Decode the result and parse it using jq style (assuming it's a JSON response)
     output = result.stdout.decode('utf-8')
 
@@ -127,7 +127,7 @@ def signalling_handshake():
 
 print("Contacting signalling server ...")
 response = signalling_handshake()
-if(requested_meeting is None):
+if(requested_meeting == ""):
     meeting_id = response["result"]["meeting_id"]
 else:
     meeting_id = requested_meeting
@@ -165,6 +165,7 @@ def listen_for_new_peers():
                     print(peer_ips)
                 elif "leaving_peer" in msg:
                     peer_ip = msg['leaving_peer']
+                    print("leaving peer ",peer_ip)
                     # print(f"[INFO] New peer joined: {peer_ip}")
                     peer_ips.remove(peer_ip)
                     del video_vc[peer_ip]
@@ -202,7 +203,7 @@ pending_buffer_video = []  # list of tuples: (sender, vc, payload)
 vc_lock_audio = threading.Lock()
 audio_vc = {ip: 0 for ip in peer_ips}
 pending_buffer_audio = []  # list of tuples: (sender, vc, payload)
-print("hello")
+# print("hello")
 def can_deliver(sender, msg_vc, local_vc):
     """
     Check causal delivery conditions:
@@ -305,19 +306,19 @@ def send_video():
 def receive_video():
     while True:
         try:
-            print("Before recv from")
+            # print("Before recv from")
             data, addr = video_sock.recvfrom(65536)
-            print("Recved from: ", addr[0])
+            # print("Recved from: ", addr[0])
             if len(data) < 4:
                 continue
             # Extract header length.
-            print("Before unpacking")
+            # print("Before unpacking")
             header_len = struct.unpack("!I", data[:4])[0]
-            print("Unpacking")
+            # print("Unpacking")
             header_json = data[4:4+header_len]
             header = json.loads(header_json.decode('utf-8'))
             sender = header["sender"]
-            print("sender = ",sender)
+            # print("sender = ",sender)
             msg_vc = header["vc"]
             payload = data[4+header_len:]
             
@@ -326,20 +327,20 @@ def receive_video():
                 # print(msg_vc)
                 # print(video_vc)
                 if can_deliver(sender, msg_vc, video_vc):
-                    print("Can delivar message")
+                    # print("Can delivar message")
                     frame_arr = np.frombuffer(payload, dtype=np.uint8)
-                    print("np.frombuffer")
+                    # print("np.frombuffer")
                     frame = cv2.imdecode(frame_arr, 1)
                     if frame is not None:
-                        print("frame is not None")
+                        # print("frame is not None")
                         cv2.imshow(f'{sender}', frame)
-                        print("After cv2.imshow")
+                        # print("After cv2.imshow")
                         if cv2.waitKey(1) & 0xFF == 27:
                             break
                     video_vc[sender] = max(msg_vc[sender],video_vc[sender])
                 else:
                     pending_buffer_video.append((sender, msg_vc, payload))
-                    print("pending")
+                    # print("pending")
             check_pending_buffer_video()
         except Exception as e:
             print("Error receiving video:", e)
@@ -406,7 +407,7 @@ def leave_meeting():
         }
         # You can either reuse the existing socket or open a new connection.
         # In this example, we create a new temporary connection.
-        result = subprocess.run(['curl', '-s', 'http://10.42.0.100:8080/leader'], stdout=subprocess.PIPE)
+        result = subprocess.run(['curl', '-s', 'http://192.168.137.100:8080/leader'], stdout=subprocess.PIPE)
         # Decode the result and parse it using jq style (assuming it's a JSON response)
         output = result.stdout.decode('utf-8')
 
