@@ -1,5 +1,5 @@
 
-#!/usr/bin/env python3
+#!/usr/bn/env python3
 import socket
 import threading
 import json
@@ -10,12 +10,13 @@ import logging
 from collections import defaultdict
 import requests
 
-IP1 =  '192.168.137.59'     # oms ip
-IP2 = '192.168.137.9'       # ronits ip
-IP3 = "10.117.166.40"       # chinmays ip
+IP1 =  '10.117.166.39'     # oms ip
+IP2 = '10.42.0.29'       # ronits ip
+IP3 = "192.168.137.106"       # chinmays ip
 SERVER_HOST = IP2
-SERVER_PORT = 6004  # Client communication port
-RAFT_PORT = 6005    # RAFT RPC port
+SERVER_PORT = 60004  # Client communication port
+RAFT_PORT = 60005    # RAFT RPC port
+LISTENING_PORT = 60010
 
 # Configuration for 3 servers (modify with your actual IPs)
 SERVERS = {
@@ -27,7 +28,7 @@ SERVERS = {
 meetings = {}
 meetings_lock = threading.Lock()
 
-peer_connections = {}
+# peer_connections = {}
 peer_connections_lock = threading.Lock()
 
 
@@ -290,13 +291,15 @@ class RaftNode:
                     meetings[meeting_id].add(client_ip)
                     peers = list(meetings[meeting_id])
                     with peer_connections_lock:
-                        other_peers = [ip for ip in peers if ip != client_ip and ip in peer_connections]
-                    notify_peers(other_peers, {
-                        "status": "success",
-                        "type": "new_peer",
-                        "meeting_id": meeting_id,
-                        "new_peer": client_ip
-                    })
+                        other_peers = [ip for ip in peers if ip != client_ip]
+                    
+                    if self.state == "leader":
+                        notify_peers(other_peers, {
+                            "status": "success",
+                            "type": "new_peer",
+                            "meeting_id": meeting_id,
+                            "new_peer": client_ip
+                        })
                     return {'peers': peers}
                 else:
                     return {'error': 'Meeting does not exist'}
@@ -309,12 +312,13 @@ class RaftNode:
                     # with peer_connections_lock:
                     #     other_peers = [ip for ip in peers if ip != client_ip and ip in peer_connections]
                     print("Before notifying peers functions")
-                    notify_peers(other_peers, {
-                        "status": "success",
-                        "type": "leave_peer",
-                        "meeting_id": meeting_id,
-                        "leaving_peer": client_ip
-                    })
+                    if self.state == "leader":
+                        notify_peers(other_peers, {
+                            "status": "success",
+                            "type": "leave_peer",
+                            "meeting_id": meeting_id,
+                            "leaving_peer": client_ip
+                        })
                     if not meetings[meeting_id]:
                         del meetings[meeting_id]
                         return {'message': 'Meeting removed'}
@@ -330,27 +334,24 @@ def notify_peers(peer_ips, message):
     if(message["type"] == "new_peer"):
         with peer_connections_lock:
             for ip in peer_ips:
-                file = peer_connections.get(ip)
-                if file:
-                    try:
-                        print(f"[Notify] Notifying peer {ip}: {message}")
-                        file.write((json.dumps(message) + '\n').encode('utf-8'))
-                        file.flush()
-                    except Exception as e:
-                        print(f"[Notify Error] Failed to notify peer {ip}: {e}")
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                print("trying to connect to ",ip)
+                sock.connect((ip, LISTENING_PORT))
+
+                # file = peer_connections.get(ip)
+                data = (json.dumps(message) + '\n').encode('utf-8')
+                sock.sendall(data)
+
     elif(message["type"] == "leave_peer"):
         print("Notifying peers about meeting leave by ",message["leaving_peer"])
         with peer_connections_lock:
             for ip in peer_ips:
-                file = peer_connections.get(ip)
-                if file:
-                    try:
-                        print(f"[Notify] Notifying peer {ip}: {message}")
-                        file.write((json.dumps(message) + '\n').encode('utf-8'))
-                        file.flush()
-                    except Exception as e:
-                        print(f"[Notify Error] Failed to notify peer {ip}: {e}")
+                # file = peer_connections.get(ip)
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.connect((ip, LISTENING_PORT))
 
+                data = (json.dumps(message) + '\n').encode('utf-8')
+                sock.sendall(data)
 
 
 def handle_client(conn, addr, raft_node):
@@ -358,8 +359,8 @@ def handle_client(conn, addr, raft_node):
     print(f"[Client] Connected by {client_ip}")
     file = conn.makefile(mode='rwb')
 
-    with peer_connections_lock:
-        peer_connections[client_ip] = file
+    # with peer_connections_lock:
+    #     peer_connections[client_ip] = file
 
     try:
         while True:
@@ -413,9 +414,9 @@ def handle_client(conn, addr, raft_node):
     except Exception as e:
         print(f"[Client] Exception: {e}")
     finally:
-        with peer_connections_lock:
-            if client_ip in peer_connections:
-                del peer_connections[client_ip]
+        # with peer_connections_lock:
+        #     if client_ip in peer_connections:
+        #         del peer_connections[client_ip]
         conn.close()
         print(f"[Client] Disconnected {client_ip}")
 
@@ -467,5 +468,3 @@ if __name__ == '__main__':
         while True:
             conn, addr = s.accept()
             threading.Thread(target=handle_raft_rpc, args=(conn, raft_node), daemon=True).start()
-
-# this is the server code with raft implemented, In this the nodes dont know who the leader is at any instant can you implement another parameter which tells everyone who is the current node and also when a client sends any request to a node who is not the leader, the node simply rejects the request saying that it is not the leader, instead can you send the request to the leader 

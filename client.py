@@ -36,7 +36,8 @@ signal.signal(signal.SIGINT, signal_handler)
 
 # ------------------ Configuration ------------------ #
 # Signalling server configuration
-SIGNAL_SERVER_PORT = 6004
+SIGNAL_SERVER_PORT = 60004
+LISTENING_PORT = 60010
 
 # UDP ports for video, audio (and note that CBCAST is now applied to these channels)
 VIDEO_PORT = 5000
@@ -77,6 +78,62 @@ def get_local_ip():
 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
 
+
+def listen_for_new_peers():
+    def handler():
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind(('0.0.0.0', LISTENING_PORT))
+            s.listen()
+            while True:
+                conn, addr = s.accept()
+                handle_something(conn)
+
+
+        # try:
+        #     while True:
+        #         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        #             result = subprocess.run(['curl', '-s', 'http://192.168.137.100:8080/leader'], stdout=subprocess.PIPE)
+        #             # Decode the result and parse it using jq style (assuming it's a JSON response)
+        #             output = result.stdout.decode('utf-8')
+
+        #             # Use json module to parse the JSON and extract the leader IP
+        #             data = json.loads(output)
+        #             leader_ip = data.get('leader')
+        #             s.connect((leader_ip, SIGNAL_SERVER_PORT))
+        #             # Now keep listening for any "new_peer" announcements
+        #             data = s.recv(4096)
+        #             if not data:
+        #                 break
+        #             msg = json.loads(data.decode().strip())
+        #             if 'new_peer' in msg:
+        #                 print("New peer connection")
+        #                 peer_ip = msg['new_peer']
+                        
+        #                 # print(f"[INFO] New peer joined: {peer_ip}")
+        #                 peer_ips.append(peer_ip)
+        #                 video_vc[peer_ip] = 0
+        #                 print("New peer added")
+        #                 print(peer_ips)
+        #             elif "leaving_peer" in msg:
+        #                 peer_ip = msg['leaving_peer']
+        #                 print("leaving peer ",peer_ip)
+        #                 # print(f"[INFO] New peer joined: {peer_ip}")
+        #                 peer_ips.remove(peer_ip)
+        #                 del video_vc[peer_ip]
+        #                 print("peer removed")
+        #                 print(peer_ips)
+        #                 cv2.destroyWindow(peer_ip)
+
+                     
+        # except Exception as e:
+        #     print("[ERROR] Listener thread:", e)
+
+    threading.Thread(target=handler, daemon=True).start()
+    
+listen_for_new_peers()
+
+
 def signalling_handshake():
     """
     Connects to the signalling server, sends a JSON request including the client's actual IP,
@@ -92,7 +149,7 @@ def signalling_handshake():
     else:
         request["action"] = "join"
         request["meeting_id"] = requested_meeting
-    result = subprocess.run(['curl', '-s', 'http://192.168.137.100:8080/leader'], stdout=subprocess.PIPE)
+    result = subprocess.run(['curl', '-s', 'http://10.42.0.100:8080/leader'], stdout=subprocess.PIPE)
     # Decode the result and parse it using jq style (assuming it's a JSON response)
     output = result.stdout.decode('utf-8')
 
@@ -142,44 +199,34 @@ print("Peer list:", peer_ips)
 video_vc = {ip: 0 for ip in peer_ips}  # includes local
 
 
+def handle_something(conn):
+    global peer_ips
+    data = conn.recv(4096)
+    if not data:
+        print("Did not receive any data on the listening port")
+        return
+    msg = json.loads(data.decode().strip())
+    if 'new_peer' in msg:
+        print("New peer connection from ", peer_ip)
+        peer_ip = msg['new_peer']
+        peer_ips.append(peer_ip)
+        print("after new peer, Peer ips = ",peer_ips)
+        video_vc[peer_ip] = 0
+        print("New peer added")
+        print(peer_ips)
+    elif "leaving_peer" in msg:
+        peer_ip = msg['leaving_peer']
+        print("leaving peer ",peer_ip)
+        print("Peer ips = ",peer_ips)
+        # print(f"[INFO] New peer joined: {peer_ip}")
+        peer_ips.remove(peer_ip)
+        del video_vc[peer_ip]
+        print("peer removed")
+        print(peer_ips)
+        cv2.destroyWindow(peer_ip)
     
-def listen_for_new_peers():
-    def handler():
-        try:
-            # with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            #     s.connect((SIGNAL_SERVER_HOST, SIGNAL_SERVER_PORT))
-                # Now keep listening for any "new_peer" announcements
-            while True:
-                data = sock.recv(4096)
-                if not data:
-                    break
-                msg = json.loads(data.decode().strip())
-                if 'new_peer' in msg:
-                    print("New peer connection")
-                    peer_ip = msg['new_peer']
-                    
-                    # print(f"[INFO] New peer joined: {peer_ip}")
-                    peer_ips.append(peer_ip)
-                    video_vc[peer_ip] = 0
-                    print("New peer added")
-                    print(peer_ips)
-                elif "leaving_peer" in msg:
-                    peer_ip = msg['leaving_peer']
-                    print("leaving peer ",peer_ip)
-                    # print(f"[INFO] New peer joined: {peer_ip}")
-                    peer_ips.remove(peer_ip)
-                    del video_vc[peer_ip]
-                    print("peer removed")
-                    print(peer_ips)
-                    cv2.destroyWindow(peer_ip)
-
-                     
-        except Exception as e:
-            print("[ERROR] Listener thread:", e)
-
-    threading.Thread(target=handler, daemon=True).start()
     
-listen_for_new_peers()
+
 
 # Determine our own IP from the list (fallback if necessary)
 # try:
@@ -407,7 +454,7 @@ def leave_meeting():
         }
         # You can either reuse the existing socket or open a new connection.
         # In this example, we create a new temporary connection.
-        result = subprocess.run(['curl', '-s', 'http://192.168.137.100:8080/leader'], stdout=subprocess.PIPE)
+        result = subprocess.run(['curl', '-s', 'http://10.42.0.100:8080/leader'], stdout=subprocess.PIPE)
         # Decode the result and parse it using jq style (assuming it's a JSON response)
         output = result.stdout.decode('utf-8')
 
