@@ -12,6 +12,7 @@ import sounddevice as sd
 import queue
 import signal
 from queue import Queue
+import subprocess
 
 # my_video_queue = Queue(maxsize=1)
 # remote_video_queue = Queue(maxsize=1)
@@ -23,6 +24,7 @@ stop_event = threading.Event()
 # ------------------ Signal Handler ------------------ #
 def signal_handler(sig, frame):
     print("\nReceived Ctrl+C. Shutting down...")
+    leave_meeting()
     stop_event.set()
     # Close any OpenCV windows
     cv2.destroyAllWindows()
@@ -34,8 +36,7 @@ signal.signal(signal.SIGINT, signal_handler)
 
 # ------------------ Configuration ------------------ #
 # Signalling server configuration
-SIGNAL_SERVER_HOST = "10.145.203.100"   # update if the signalling server is remote
-SIGNAL_SERVER_PORT = 6002
+SIGNAL_SERVER_PORT = 6004
 
 # UDP ports for video, audio (and note that CBCAST is now applied to these channels)
 VIDEO_PORT = 5000
@@ -91,8 +92,29 @@ def signalling_handshake():
     else:
         request["action"] = "join"
         request["meeting_id"] = requested_meeting
+    result = subprocess.run(['curl', '-s', 'http://10.42.0.100:8080/leader'], stdout=subprocess.PIPE)
+    # Decode the result and parse it using jq style (assuming it's a JSON response)
+    output = result.stdout.decode('utf-8')
 
-    sock.connect((SIGNAL_SERVER_HOST, SIGNAL_SERVER_PORT))
+    # Use json module to parse the JSON and extract the leader IP
+    data = json.loads(output)
+    leader_ip = data.get('leader')
+    
+    print(leader_ip)
+    
+    if(leader_ip == 'null'):
+        print("Failed signalling handshake")
+        sys.exit(1)
+
+    
+    
+    
+    
+    try:
+        sock.connect((leader_ip, SIGNAL_SERVER_PORT))
+    except:
+        print("failed contacting signalling server")
+        sys.exit(1)
     sock.sendall((json.dumps(request) + "\n").encode('utf-8'))
     response_line = sock.makefile(mode='r').readline()
     response = json.loads(response_line.strip())
@@ -105,13 +127,16 @@ def signalling_handshake():
 
 print("Contacting signalling server ...")
 response = signalling_handshake()
-meeting_id = response["meeting_id"]
-peer_ips = response["peers"]
+if(requested_meeting is None):
+    meeting_id = response["result"]["meeting_id"]
+else:
+    meeting_id = requested_meeting
+peer_ips = response["result"]["peers"]
 # peer_ips.append('10.145.203.100')
 
 
 # peer_ips.append('10.145.203.100')
-print(f"Joined meeting {meeting_id}")
+# print(f"Joined meeting {meeting_id}")
 print("Peer list:", peer_ips)
 
 video_vc = {ip: 0 for ip in peer_ips}  # includes local
@@ -126,19 +151,28 @@ def listen_for_new_peers():
                 # Now keep listening for any "new_peer" announcements
             while True:
                 data = sock.recv(4096)
-                print("New peer connection")
                 if not data:
                     break
                 msg = json.loads(data.decode().strip())
                 if 'new_peer' in msg:
+                    print("New peer connection")
                     peer_ip = msg['new_peer']
                     
-                    print(f"[INFO] New peer joined: {peer_ip}")
+                    # print(f"[INFO] New peer joined: {peer_ip}")
                     peer_ips.append(peer_ip)
                     video_vc[peer_ip] = 0
                     print("New peer added")
                     print(peer_ips)
-                    
+                elif "leaving_peer" in msg:
+                    peer_ip = msg['leaving_peer']
+                    # print(f"[INFO] New peer joined: {peer_ip}")
+                    peer_ips.remove(peer_ip)
+                    del video_vc[peer_ip]
+                    print("peer removed")
+                    print(peer_ips)
+                    cv2.destroyWindow(peer_ip)
+
+                     
         except Exception as e:
             print("[ERROR] Listener thread:", e)
 
@@ -357,6 +391,41 @@ def receive_audio():
         except Exception as e:
             print("Error receiving audio:", e)
             time.sleep(0.01)
+            
+def leave_meeting():
+    """
+    Notifies the signalling server that the client is leaving the meeting.
+    This implementation sends a 'leave' action along with the meeting_id.
+    """
+    try:
+        leave_request = {
+            "client_ip": get_local_ip(),
+            "action": "leave",
+            "meeting_id": meeting_id,  # use the meeting_id obtained from the handshake
+            "name": client_name  # optionally include your identity for clean up
+        }
+        # You can either reuse the existing socket or open a new connection.
+        # In this example, we create a new temporary connection.
+        result = subprocess.run(['curl', '-s', 'http://10.42.0.100:8080/leader'], stdout=subprocess.PIPE)
+        # Decode the result and parse it using jq style (assuming it's a JSON response)
+        output = result.stdout.decode('utf-8')
+
+        # Use json module to parse the JSON and extract the leader IP
+        data = json.loads(output)
+        leader_ip = data.get('leader')
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as leave_sock:
+            try:
+                leave_sock.connect((leader_ip, SIGNAL_SERVER_PORT))
+                leave_sock.sendall((json.dumps(leave_request) + "\n").encode('utf-8'))
+                print("Notified server about leaving the meeting.")
+            except:
+                print("Error leaving meeting...closing client")
+                stop_event.set()
+                # Close any OpenCV windows
+                cv2.destroyAllWindows()
+                sys.exit(1)
+    except Exception as e:
+        print("Error while leaving meeting:", e)
 
 def audio_output_thread():
     """
